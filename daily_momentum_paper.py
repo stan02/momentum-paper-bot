@@ -18,9 +18,9 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 import urllib.parse
-import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 # ============================================================
@@ -40,15 +40,12 @@ ARXIV_API_URL = "http://export.arxiv.org/api/query"
 
 # 搜索关键词组合
 SEARCH_QUERIES = [
-    'all:"daily momentum" AND all:strategy',
-    'all:"daily momentum" AND all:trading',
-    'all:"time-series momentum" AND all:daily',
-    'all:"momentum strategy" AND all:daily AND all:return',
-    'all:"short-term momentum" AND all:asset',
-    'all:"cross-sectional momentum" AND all:daily',
-    'all:"momentum" AND all:behavioral AND all:finance',
-    'all:"momentum factor" AND all:empirical',
-    'all:"momentum" AND all:asset pricing AND all:anomaly',
+    '"time-series momentum" strategy',
+    '"daily momentum" trading strategy',
+    '"momentum strategy" daily return',
+    '"cross-sectional momentum"',
+    '"momentum factor"',
+    'momentum asset pricing anomaly',
 ]
 
 CATEGORIES = ("cat:q-fin.PR OR cat:q-fin.GN OR cat:q-fin.ST "
@@ -163,62 +160,86 @@ def save_state(state):
         json.dump(state, f, indent=2, ensure_ascii=False)
 
 
+def search_arxiv_via_api():
+    """尝试通过 arXiv API 搜索"""
+    # 改用 HTML 搜索，跳过有问题的 API
+    return None
+
+
 def search_arxiv(query, max_results=15):
-    params = {
-        'search_query': f'({query}) AND ({CATEGORIES})',
-        'start': 0,
-        'max_results': max_results,
-        'sortBy': 'submittedDate',
-        'sortOrder': 'descending',
-    }
-    url = f"{ARXIV_API_URL}?{urllib.parse.urlencode(params, safe='():')}"
-    print(f"[搜索] {url[:110]}...")
+    """通过 arXiv HTML 搜索页面获取论文列表（API 经常限流，改用网页搜索）"""
+    search_query = query.replace("all:", "").replace('"', "")
+    url = ("https://arxiv.org/search/?searchtype=all"
+           f"&query={urllib.parse.quote(query)}"
+           "&order=-announced_date_first")
+    print(f"[搜索] 动量论文: {query[:60]}...")
     req = urllib.request.Request(url, headers={
-        'User-Agent': 'MomentumPaperBot/1.0 (mailto:research@example.com)'
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                       'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     })
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            xml_data = resp.read().decode('utf-8')
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            html = resp.read().decode('utf-8')
     except Exception as e:
         print(f"[错误] 搜索失败: {e}")
         return []
-    ns = {'atom': 'http://www.w3.org/2005/Atom',
-          'arxiv': 'http://arxiv.org/schemas/atom'}
-    root = ET.fromstring(xml_data)
-    entries = root.findall('atom:entry', ns)
+
     papers = []
-    for entry in entries:
-        paper_id_full = entry.find('atom:id', ns).text.strip()
-        arxiv_id_match = re.search(r'arxiv\.org/abs/(.+?)(?:v\d+)?$', paper_id_full)
-        if not arxiv_id_match:
+    # 解析 HTML 条目
+    # arXiv 搜索页面的每个结果形如:
+    # <li class="arxiv-result"> ... <p class="title">Title</p> ... <span class="tag">q-fin.PM</span> ...
+    # <a href="/abs/1234.56789"> 或 <a href="https://arxiv.org/abs/1234.56789">
+    # 提取所有 arxiv-result 块
+    pattern = r'<li[^>]*class="arxiv-result"[^>]*>(.*?)</li>'
+    blocks = re.findall(pattern, html, re.DOTALL)
+    print(f"  >> 找到 {len(blocks)} 个结果块")
+    for block in blocks:
+        # 提取 arXiv ID
+        id_match = re.search(r'href="[^"]*/abs/(\d+\.\d+)"', block)
+        if not id_match:
             continue
-        arxiv_id = arxiv_id_match.group(1)
-        title = entry.find('atom:title', ns).text.strip().replace('\n', ' ').replace('  ', ' ')
-        summary = entry.find('atom:summary', ns).text.strip().replace('\n', ' ').replace('  ', ' ')
-        published = entry.find('atom:published', ns).text.strip()
-        updated = entry.find('atom:updated', ns).text.strip()
+        arxiv_id = id_match.group(1)
+        # 提取标题
+        title_match = re.search(r'<p[^>]*class="title[^"]*"[^>]*>\s*<a[^>]*>(.*?)</a>', block, re.DOTALL)
+        if not title_match:
+            title_match = re.search(r'class="title[^"]*"[^>]*>(.*?)</p>', block, re.DOTALL)
+        title = title_match.group(1).strip() if title_match else "Unknown"
+        title = re.sub(r'<[^>]+>', '', title)
+        title = title.replace('\n', ' ').replace('  ', ' ').strip()
+        # 提取摘要
+        summary_match = re.search(r'<span[^>]*class="abstract-short[^"]*"[^>]*>(.*?)</span>', block, re.DOTALL)
+        summary = summary_match.group(1).strip() if summary_match else ""
+        summary = re.sub(r'<[^>]+>', '', summary)
+        summary = summary.replace('\n', ' ').replace('  ', ' ').strip()[:500]
+        # 提取作者
+        authors_match = re.search(r'<span[^>]*class="authors[^"]*"[^>]*>(.*?)</span>', block, re.DOTALL)
         authors = []
-        for author_elem in entry.findall('atom:author', ns):
-            authors.append(author_elem.find('atom:name', ns).text.strip())
+        if authors_match:
+            authors_text = re.sub(r'<[^>]+>', '', authors_match.group(1))
+            authors = [a.strip() for a in authors_text.replace('et al.', '').split(',') if a.strip()]
+        # 提取日期
+        date_match = re.search(r'Submitted\s+(\d+)\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})', block, re.DOTALL)
+        published = ""
+        if date_match:
+            day, month_str, year = date_match.group(1), date_match.group(2), date_match.group(3)
+            month_map = {"January":"01","February":"02","March":"03","April":"04","May":"05","June":"06",
+                         "July":"07","August":"08","September":"09","October":"10","November":"11","December":"12"}
+            published = f"{year}-{month_map.get(month_str,'01')}-{day.zfill(2)}"
+        # 提取分类
         categories = []
-        for cat_elem in entry.findall('atom:category', ns):
-            categories.append(cat_elem.attrib.get('term', ''))
-        pdf_link = None
-        for link in entry.findall('atom:link', ns):
-            if link.attrib.get('title') == 'pdf':
-                pdf_link = link.attrib.get('href')
-                break
-        if not pdf_link:
-            pdf_link = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+        cat_matches = re.findall(r'<span[^>]*class="tag[^"]*"[^>]*>([^<]+)</span>', block)
+        categories = [c.strip() for c in cat_matches if c.strip()]
+        pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+
         papers.append({
             'arxiv_id': arxiv_id,
             'title': title,
             'summary': summary[:500],
             'published': published,
-            'updated': updated,
+            'updated': published,
             'authors': authors[:10],
             'categories': categories[:10],
-            'pdf_url': pdf_link,
+            'pdf_url': pdf_url,
             'abs_url': f"https://arxiv.org/abs/{arxiv_id}",
         })
     return papers
@@ -314,7 +335,9 @@ def main():
     # ── 第 1 步：搜索 ──
     all_papers = []
     seen_ids = set()
-    for query in SEARCH_QUERIES:
+    for idx, query in enumerate(SEARCH_QUERIES):
+        if idx > 0:
+            time.sleep(5)  # 避免触发 arXiv 限流
         for p in search_arxiv(query):
             if p['arxiv_id'] not in seen_ids:
                 seen_ids.add(p['arxiv_id'])
