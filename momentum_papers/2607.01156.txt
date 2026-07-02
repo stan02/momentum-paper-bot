@@ -1,0 +1,1726 @@
+arXiv:2607.01156v1 [physics.comp-ph] 1 Jul 2026
+
+Verification of a sequential thermo-poroelasticity formulation
+in PFLOTRAN
+J. Al Kubaisy1*, G. E. Hammond1 , S. Karra2 , J. Burghardt1 , L. Murdoch3 ,
+T. Johnson1 , K. M. Rosso2
+1*
+
+Energy and Environment Directorate, Pacific Northwest National Laboratory,
+Richland, 99352, WA, USA.
+2
+Integrated Discovery Sciences Directorate, Pacific Northwest National Laboratory,
+Richland, 99352, WA, USA.
+3
+Environmental Engineering and Earth Science Department, Clemson University,
+Clemson, 29634, SC, USA.
+*Corresponding author(s). E-mail(s): jumanah.alkubaisy@pnnl.gov;
+Abstract
+We present the verification of a thermo–hydrologic–mechanical capability implemented within
+the PFLOTRAN framework, with emphasis on benchmark-based assessment of the THM implementation. The thermal–hydrologic (TH) equations for mass and energy balance are solved on
+control-volume blocks or Voronoi cells, while the quasi-static momentum balance is solved on an
+element-based dual mesh. The coupling is achieved using a strictly sequential, non-iterative fixedstress split strategy in which the TH system is solved implicitly for pressure and temperature, followed
+by a mechanics update for the displacement unknowns. Several verification problems are set up
+against poroelastic and thermo-poroelastic benchmarks, demonstrating agreement with analytical or
+semi-analytical benchmark responses for pressure diffusion, the temperature field, and mechanical
+deformation. In addition, we propose a treatment for discontinuities (e.g., fractures) based on mapping between mechanical and flow degrees of freedom, and validate the approach by comparison to an
+analytical solution. This work establishes the basis for thermo–poroelastic coupling in PFLOTRAN
+and provides a solid modeling foundation for a range of applications (e.g., enhanced geothermal systems and other subsurface energy storage) involving coupled thermal–hydrologic–mechanical (THM)
+processes in geologic porous media.
+Keywords: Thermo-hydrologic-mechanical, coupled processes, flow, mechanics, PFLOTRAN, subsurface,
+geothermal
+
+1 Introduction
+Coupled thermal–hydrologic–mechanical (THM) processes in geological porous media govern the
+evolution of pressure, temperature, stress, and deformation across a wide range of subsurface
+applications, including underground energy storage [1], carbon sequestration [2], and geothermal
+energy systems [3]. In such systems, pore pressure changes can impact mechanical stresses resulting
+in compaction, stress redistribution, and fracture opening and closure [4–6]. Temperature variations introduce thermoelastic effects and can strongly affect fluid and rock properties, with corresponding impacts on flow and pressure diffusion [7, 8]. In many settings, geochemical coupling
+through thermo–hydrologic–mechanical–chemical (THMC) processes introduces additional feedback via
+fluid–rock interactions (e.g., dissolution–precipitation and mineral alteration). These reactions can alter
+
+1
+
+porosity and permeability [9, 10] and may also affect mechanical strength and stiffness, thereby influencing flow, heat transport, and deformation. Capturing these dynamics is important for understanding
+and assessing performance in engineered subsurface operations and natural hydrothermal environments.
+Robust numerical approximations of THM coupled processes remain challenging because they combine nonlinear flow and heat transport with mechanical deformation over highly heterogeneous media
+and multiple spatial and temporal scales. Monolithic formulations where a single system of equations
+is set up to solve all primary unknowns simultaneously can offer strong coupling but may be complex
+to implement and computationally demanding–particularly for large three-dimensional problems– while
+sequential (or operator-splitting) strategies improve modularity but must be designed to preserve stability and accuracy [8, 11]. In the latter approach, the coupled system is decomposed into subproblems
+(typically a flow solve and a quasi-static momentum-balance solve) that are advanced sequentially within
+each time step, exchanging pressure, temperature, and volumetric strain to enforce coupling.
+Two common splits are the fixed-stress split, in which the flow problem is solved while holding the
+total mean stress fixed, and the undrained split, in which the mechanics problem is solved first assuming
+no change in fluid mass content and then the flow equation is solved sequentially to relax that constraint
+and update the pressure over the full time step. Among these, the fixed-stress split is frequently preferred
+due to its favorable stability and convergence behavior for poroelastic systems [11–13].
+Several open-source codes support coupled THM processes for subsurface applications—such as
+GEOSX [14], OpenGeoSys [15], and MOOSE [16]. A key advantage of open-source software is transparency in its implementation, along with the ability to modify and extend governing equations,
+constitutive models, and coupling strategies to address application-specific requirements and modeling
+challenges. In this context, there is strong motivation to develop THM capabilities within established
+community codes that already provide robust, scalable solvers for flow and transport on high-performance
+computing platforms. Accordingly, our work focuses on PFLOTRAN, extending its thermal–hydrologic
+and reactive-transport infrastructure to enable robust coupled THM simulations.
+PFLOTRAN is an open-source, massively parallel code for modeling subsurface flow, heat transport,
+and reactive transport on high-performance computing platforms [17–19]. Over the past two decades,
+it has established a robust foundation for simulating coupled thermal–hydrologic–chemical (THC) processes in geologic media. A geomechanics capability was introduced to PFLOTRAN over a decade ago;
+however, the coupling remained limited in scope and lacked the robustness required for fully coupled
+thermo–hydrologic–mechanical (THM) simulations.
+The primary objective of this manuscript is to verify the PFLOTRAN THM implementation against
+benchmark problems that exercise pressure diffusion, thermo-poroelastic response, deformation, discontinuity loading, and borehole stress redistribution. More specifically, we aim to: (i) document the
+benchmark suite used to assess the THM capability; (ii) verify the implementation against analytical or
+semi-analytical solutions for pressure, temperature, deformation, stress, and crack-opening response; and
+(iii) demonstrate the consistency of the mapping between flow and geomechanics degrees of freedom for
+problems involving discontinuities such as fractures or pressurized cracks.
+In this work, we present the formulation needed to define the verification problems and the corresponding benchmark results for a thermo–poroelasticity capability implemented within the PFLOTRAN
+framework. The thermal–hydrologic (TH) equations for mass and energy balance are solved using the
+finite-volume method, and the quasi-static momentum balance for the mechanics problem is solved using
+the finite-element method. The coupling is achieved via a strictly sequential, non-iterative fixed-stress
+split: the TH system is solved implicitly for pressure and temperature, followed by a mechanics update
+for displacement unknowns, consistent with standard poromechanics coupling theory [4, 7, 11].
+
+2 Approach
+2.1 Governing equations
+We consider coupled flow and mechanics for single-phase, variably saturated, non-isothermal systems
+under a small-strain, quasi-static assumption. Unless stated otherwise for a specific benchmark, source
+terms are represented by Qw and Qe , and gravity enters through the Darcy and body-force terms below.
+In thermal-hydraulic (TH) flow mode, the mass balance is given by
+
+∂ (ϕSρ)
++ ∇ · (ρq) = Qw ,
+∂t
+
+2
+
+(1)
+
+here ϕ is the porosity, S is the saturation, ρ is the fluid mass density, t is time, q is the volumetric flux,
+and Qw is the mass source term. The volumetric flux is calculated using Darcy’s law
+
+q=−
+
+kkr
+∇(p − ρgz ),
+µ
+
+(2)
+
+where k is the intrinsic permeability, kr is the relative permeability, µ is the dynamic fluid viscosity, p is
+the pressure unknown, g is the gravity acceleration, and z is the vertical coordinate. The energy balance
+of the system is described by
+
+
+∂
+ϕSρU + (1 − ϕ)ρr cp T + ∇ · (ρqH − κ∇T ) = Qe ,
+∂t
+
+(3)
+
+where U is the fluid internal energy, ρr is the rock (solid skeleton) density, cp is the effective rock
+heat capacity used in the PFLOTRAN TH formulation, T is the temperature unknown, H is the fluid
+enthalpy, κ is the thermal conductivity combining both fluid and porous medium contributions, and Qe
+is the energy source term.
+The mechanical deformation is governed by the quasi-static balance of linear momentum
+
+∇ · σ + ρb g = 0.
+
+(4)
+
+where σ is the Cauchy total stress tensor, g is the gravity vector (or, more generally, a prescribed specific
+body force), and ρb is the bulk density calculated by
+
+ρb = ϕρ + (1 − ϕ)ρr .
+
+(5)
+
+The formulation in Eq. (4) assumes negligible inertial effects (i.e., quasi-static conditions), infinitesimal
+strains, and the absence of external body forces other than gravity. The stress-strain relationship is
+
+σ = λ tr(ε)I + 2µε − bpI − βT ∆T I,
+
+(6)
+
+λ is the Lamé modulus and µ is the shear modulus. I is the identity matrix and tr(ε) is the trace of the
+strain tensor. The last two terms on the right-hand side include Biot’s theory [4] and thermal effects [7]; b
+is Biot’s coefficient, ∆T = T −T 0 is the temperature change relative to the reference temperature T 0 , and
+βT is the isotropic thermal-stress coefficient (for example, βT = 3Kdr αT when a linear thermal-expansion
+coefficient αT is introduced explicitly). Throughout this work, we adopt the convention that positive
+stresses denote tension and negative stresses denote compression. Biot’s coefficient [4] is calculated by
+Kdr
+,
+(7)
+Ks
+where Kdr is the drained bulk modulus and Ks the bulk modulus of the solid grain. The straindisplacement relationship under the small deformation assumption is given by
+b=1−
+
+ε = 12 (∇u + (∇u)T ),
+
+(8)
+
+where ∇u is the displacement gradient and (·)T denotes transpose. The volumetric strain, which
+represents the relative change in bulk volume, is defined as the trace of the strain tensor:
+
+εv = tr(ε).
+
+(9)
+
+2.2 Finite volume method for thermal-hydraulic (TH) model
+The flow variables, pressure and temperature, are defined cell-wise when solving the mass balance Eq. (1)
+and the energy balance Eq. (3). The control volume cells can be structured blocks or represented using
+Voronoi-type [20–22]; see Fig. 1b. Voronoi cells are widely used to construct unstructured meshes [23–
+25] that are particularly well-suited for finite-volume discretizations of flow and transport. We briefly
+note that the construction of such cells follows the principle that the line connecting two neighboring
+cell centers is orthogonal to their shared face. This orthogonality condition is crucial for employing the
+
+3
+
+e11
+e12
+e3
+
+e10
+
+e9
+e8
+
+e1
+e2
+
+e4
+e5
+
+c2
+
+c1
+
+e7
+
+c3
+
+e6
+
+(a)
+
+(b)
+
+Fig. 1: Two-dimensional illustration of dual-mesh approach: (a) element-based mesh with triangular
+elements (e1 -e12 ), and (b) generated 2D Voronoi cells (c1 -c3 ).
+
+celli+1
+
+celli
+
+shared face
+
+Fig. 2: Three-dimensional schematic of two neighboring Voronoi control volumes, celli and celli+1 ,
+sharing a common face across which intercell fluxes are evaluated.
+two-point flux approximation (TPFA) [24, 26, 27]. Fig. 2 shows two neighboring Voronoi cells (celli and
+celli+1 ) highlighting the shared face.
+The finite-volume formulation is obtained by (i) integrating the mass balance Eq. (1) over a control
+volume Vi , (ii) applying the divergence theorem to convert the flux divergence into a boundary flux
+integral, and (iii) expressing the boundary integral as a sum of fluxes over the faces f ∈ ∂Vi . This results
+in the following semi-discrete finite-volume approximation:
+
+Vi
+
+X
+d
+(ϕi Si ρi ) +
+Fi,f = Vi Qw,i ,
+dt
+
+(10)
+
+f ∈∂Vi
+
+where Fi,f denotes the face mass flux. The same approach is used to derive the semi-discrete finite-volume
+approximation of the energy-balance equation, Eq. (3):
+
+Vi
+
+ 
+i
+X
+d h
+E
+ϕi Si ρi Ui + (1 − ϕi )ρr cp Ti
++
+Fi,f
+= Vi Qe,i ,
+dt
+
+E
+with Fi,f
+denoting the total energy flux across face f .
+
+4
+
+f ∈∂Vi
+
+(11)
+
+2.3 Finite element method for mechanics model
+The mechanics model uses an element-based mesh, which also serves as the basis for constructing
+the Voronoi mesh, see Fig. 1. PFLOTRAN currently supports two element types for coupled THM
+simulations: hexahedral and tetrahedral elements.
+Let Ω ⊂ Rd with boundary ∂ Ω = Γu ∪ Γt , where displacement (u = ū) is prescribed on Γu and
+traction (σn = t̄) is prescribed on Γt . We derive the weak form by multiplying Eq. (4) with a test
+function w that vanishes on the boundaries, integrate over Ω, and apply integration by parts: find u ∈ U
+such that for all w ∈ V ,
+Z
+Z
+Z
+s
+t̄ · w dΓ,
+(12)
+σ (u, p, T ) : ∇ w dΩ =
+ρb g · w dΩ +
+Ω
+
+Ω
+
+Γt
+
+where the trial space (U ) and the test space (V ) are defined as
+
+U = {u ∈ [H 1 (Ω)]d : u = ū on Γu },
+
+V = {w ∈ [H 1 (Ω)]d : w = 0 on Γu }.
+
+(13)
+
+For a linear finite element approximation, the displacement field is interpolated from nodal values
+using linear (Lagrange) shape functions. On an element e with n nodes,
+
+uh (x) =
+
+n
+X
+
+Na (x) ua ,
+
+(14)
+
+a=1
+
+where Na (x) is a linear shape function and ua is the nodal displacement vector.
+
+3 Sequentially coupled solution strategy
+3.1 Flow field initialization
+In PFLOTRAN’s thermal–hydrologic (TH) flow mode, the flow model is initialized by prescribing initial
+conditions for the primary variables—pressure (p0 ) and temperature (T 0 )—over the domain. In practice,
+these fields are often initialized from site-specific datasets derived from field observations (e.g., pressure
+measurements and temperature logs) and may be represented as spatially varying distributions, such as a
+hydrostatic pressure profile defined by a reference pressure and gravitational potential and a temperature
+field based on a geothermal gradient or other measured spatial trends.
+
+3.2 Mechanics initialization
+Once the flow field is set, we ensure that the mechanical equilibrium is met by solving an initial mechanics
+step [11]. The volumetric strain for the reference state (ε0v ) is stored for later computation.
+
+3.3 Fixed-stress split
+The solution approach here is based on solving the flow problem first, assuming the increment in total
+mean stress is fixed, i.e., σ n+1 − σ n = σ n − σ n−1 [28]. Within each flow iteration (k ) at the current
+timestep (n + 1), we solve for the flow unknowns, pressure and temperature. The porosity (ϕ) is the only
+variable dependent on both flow (via p and T ) and mechanics (via εv , Kdr , and Ks ) where it is updated
+using
+
+b − ϕ0 n
+ϕn+1,k (pn , pn+1,k , T n+1,k ) =ϕ0 + b(εnv − ε0v ) +
+(p − p0 )+
+Ks
+!
+b2
+b − ϕ0
++
+(pn+1,k − pn ) + αϕ (T n+1,k − T 0 ),
+Kdr
+Ks
+
+(15)
+
+here the superscripts 0 and n denote the initial value and the value at the previous timestep, respectively, whereas the superscript (n + 1, k ) denotes the value at the current timestep evaluated at the k th
+iteration. The reference temperature (T 0 ) and pressure (p0 ) are taken from the initialized TH state, and
+αϕ has units of inverse temperature, so that the product αϕ (T n+1,k − T 0 ) is dimensionless and can be
+5
+
+added consistently to the porosity. Under this sign convention, a positive αϕ implies that heating at
+fixed pressure and strain increases porosity, whereas cooling decreases it. In the current implementation,
+the same value is assigned to αϕ (Eq. 15) and to αT , which enters through βT in Eq. 6. This procedure is iterated until the flow solution converges, after which the mechanics step follows, updating the
+displacement using the newly obtained pressure and temperature.
+
+3.4 Solution method for sequentially coupled THM
+The coupled thermo-poroelastic problem is solved using a sequential, non-iterative coupling scheme.
+The flow subproblem is treated fully implicitly and solved with a nonlinear Newton method, while the
+mechanical equilibrium (momentum balance) subproblem is solved as a linear system for incremental
+displacements. The coupling is enforced in the mass balance Eq. (1) and energy balance Eq. (3) by the
+porosity dependence on volumetric strain, mechanical properties, and pressure and temperature evolution
+in the system, see Eq. (15).
+Over a time step tn → tn+1 , the nonlinear balance laws for mass and energy are solved in residual
+form,
+ 
+
+p
+n+1
+n
+R xTH ; εv = 0,
+xTH =
+,
+(16)
+T
+where p and T are the primary TH unknowns and εnv denotes volumetric strain, unchanged during the
+TH solve within a sequential coupling step. For completeness, we recall that Newton’s method computes
+updates δxkTH by solving the linearized system
+k
+k
+xk+1
+TH = xTH + δxTH ,
+
+Jk δxkTH = −Rk ,
+
+(17)
+
+with Jk = ∂R/∂xTH assembled from the fully implicit finite-volume discretization. After convergence of
+the TH Newton iterations, the mechanics subproblem is updated by solving the quasi-static momentum
+balance using the converged pressure and temperature as loads through thermo-poroelastic coupling
+(Eq. (6)) which yields a linear system of the form
+n+1
+K un+1 = fext
++ fp (pn+1 ) + fT (T n+1 ),
+
+(18)
+
+n+1
+captures body forces and traction boundary conditions, and
+where K is the elastic stiffness matrix, fext
+fp and fT represent the nodal forces induced by pore pressure (Biot term) and thermal strain, respectively.
+There is no dependence of K on u for linear elasticity, hence, the mechanics solve is performed as a linear
+system each time step using an iterative Krylov solver. This strictly sequential solution strategy for THM
+processes captures the nonlinear TH physics while providing an efficient linear mechanics update at each
+time step.
+We briefly summarize how PFLOTRAN leverages PETSc (Portable, Extensible Toolkit for Scientific
+Computation) [29–31] in its solution workflow. PETSc provides scalable data structures and solvers
+for large sparse systems on distributed-memory architectures. PFLOTRAN employs PETSc’s nonlinear
+solver infrastructure (SNES) for the Newton iterations and preconditioned Krylov subspace methods
+(KSP) for solving each linearized system, Eq. (17), as well as the mechanics system, Eq. (18). PETSc also
+manages parallel vector and matrix assembly, enabling the coupled THM simulations to scale efficiently
+on high-performance computing platforms [17].
+
+4 Numerical experiments
+We present a suite of benchmark problems to verify the THM implementation in PFLOTRAN. The verification experiments include Terzaghi’s consolidation problem [32], Schiffman’s problem [33], Mandel’s
+problem [34], and the thermo-poroelastic bar problem of Bai [35]. For each case, numerical results are
+compared with analytical or semi-analytical solutions for the transient evolution of pore pressure, temperature, deformation, or stress under prescribed loading and drainage conditions (applied to the mass
+balance Eq. (1), energy balance Eq. (3) when relevant, and the momentum balance Eq. (4)). We then
+demonstrate our approach for representing discontinuities (e.g., fractures or cracks). Finally, we verify
+the accuracy of the geomechanics implementation for circular borehole models. To create unstructured
+meshes for the numerical experiment presented here, a combination of CUBIT [36, 37], LaGriT [38],
+Voronoi [39], and MeshIO python package [40] are used in this work, see Fig. 3. The structured grids
+(control volume blocks for flow and hexahedral elements for mechanics) are internally supported and
+generated by PFLOTRAN.
+6
+
+Cubit
+Create element mesh
+Geometry, regions
+Output: mesh.exo
+
+MeshIO
+
+Voronoi package
+
+Convert to ASCII
+mesh file formats
+(AVS)
+Output: mesh.avs
+
+Create flow mesh
+Output: mesh.uge
+
+LaGriT
+
+Run geomech_mapping.py
+
+Extract zone, faceset
+Output: *.zone,
+*.faceset
+
+Generate mesh.ugi, vset, sideset, and
+mapping files
+Output: *.vset, *.ss, mapping.dat, mesh.ugi
+
+Fig. 3: The meshing workflow used to generate unstructured grids and input files for coupled
+flow–mechanics simulations in PFLOTRAN. The workflow produces: (i) mesh.uge, the unstructured grid
+for flow simulations (cell list and connectivity); (ii) mesh.ugi, the standard finite-element mesh description (element vertex lists and vertex coordinates); (iii) *.vset, the vertex-set file used to define domain
+regions; (iv) *.ss, the sideset file specifying boundary nodes where stress conditions are applied; and (v)
+mapping.dat, the mapping between flow and geomechanics nodes (typically one-to-one).
+
+Table 1: Model setup and parameters in numerical experiment 4.1 for both Terzaghi’s problem and
+Schiffman’s problem.
+Parameter
+Domain length (Lx )
+Cross-sectional area (Ly × Lz )
+Young’s modulus (E)
+Poisson’s ratio (ν)
+Biot’s coefficient (b)
+Fluid bulk modulus (Kf )
+Porosity (ϕ)
+Permeability (k)
+Fluid viscosity (µ)
+Applied compressive stress load, Terzaghi’s setup (w)
+Applied compressive stress load, Schiffman’s setup (w)
+Number of elements
+Number of Voronoi cells
+
+Value
+
+Unit
+
+1
+0.01
+100
+0.2
+1
+∞
+0.2
+1 × 10−8
+1
+1
+3
+10.2k
+2.4k
+
+m
+m2
+MPa
+–
+–
+Pa
+–
+m2
+Pa·s
+Pa
+Pa
+–
+–
+
+4.1 1D consolidation problems
+We verify the coupled flow–geomechanics implementation using two classical one-dimensional consolidation benchmarks: Terzaghi’s instantaneous (step) loading problem [32] and the time dependent extension
+proposed by Schiffman [33]. Both tests are set up as pseudo one-dimensional problems with domain
+length (Lx ), with deformation and flow restricted to the horizontal direction x ∈ [0, Lx ]. The primary
+unknowns are the pore pressure p(x, t) and the displacement u(x, t). Material properties are homogeneous
+and isotropic, and gravity is neglected for the verification cases (see Table 1 for model parameters, and
+Fig. 4a and 4b for conceptual model sketch and meshed domain, respectively); the boundary conditions
+are imposed on the mass balance Eq. (1) and the momentum balance Eq. (4).
+
+Terzaghi’s problem
+Terzaghi’s classical consolidation problem [32] considers an instantaneous application of a surface load W
+on a drained boundary (Dirichlet pressure condition for the mass balance Eq. (1)), Fig. 4a. Immediately
+after loading (t → 0+ ), the response is undrained and the load is balanced by a sudden increase in pore
+pressure. The pore pressure then dissipates due to drainage at x = 0, effective stress increases, and the bar
+
+7
+
+W
+
+𝑥
+(a)
+
+(b)
+
+Fig. 4: (a) Conceptual sketch of Terzaghi’s problem and Schiffman’s problem. A compressive stress load
+(W) is applied on the left face of a saturated porous medium, which also serves as the only drained
+boundary. The right boundary is fixed, while the top and bottom boundaries are prescribed with zero
+normal displacement (rollers). (b) Computational domain using tetrahedral elements.
+undergoes consolidation. The numerical solutions for pressure and displacement exhibit relative L2 -norm
+errors below 0.002 and 0.01, respectively (Table A1), compared with the analytical solutions (Fig. 5).
+
+Schiffman’s problem
+The problem proposed by Schiffman [33] extends Terzaghi’s consolidation model to time dependent
+loading, verifying the transient coupling between the flow and mechanical models. The domain geometry,
+initial conditions (for the mass balance Eq. (1) and energy balance Eq. (3) when applicable), and drainage
+conditions are the same as Terzaghi’s problem; only the applied surface load differs. The load is increased
+linearly in time until reaching the maximum of 3 Pa at 3 ms. During the ramp, pore pressure increases and
+diffuses simultaneously. This response differs from the purely undrained initial condition in Terzaghi’s
+(step load) problem. After 3 ms, the load is held constant and the excess pore pressure dissipates as the
+bar undergoes consolidation.
+Fig. 6 presents the numerical approximations of pressure and strain alongside the analytical solutions
+[41]. The numerical results accurately capture (i) the pressure buildup during the loading phase, (ii) the
+subsequent pressure dissipation, and (iii) the evolution of principal strain in the system. The relative
+L2 -norm errors for pressure and strain are less than 0.04 and 0.32, respectively (Table A1).
+
+4.2 Mandel’s problem
+Mandel’s problem [34] is a classic poroelastic two-dimensional benchmark in which a rectangular, saturated porous medium is subjected to a suddenly applied compressive load 2F (Fig. 7a). In this experiment,
+we model one-quarter of the domain by exploiting geometric and loading symmetry about the mid-planes.
+The analytical solutions for pressure, horizontal displacement, and vertical displacement, obtained
+from [42], are plotted with the numerical results in Fig. 8. Fig. 8a shows the pore pressure profile at
+several time instances, capturing the Mandel–Cryer effect — a non-monotonic pressure response arising
+from the coupling between fluid flow and mechanical deformation under mixed boundary conditions [43];
+drained boundaries corresponding to conditions on the mass balance Eq. (1), traction-free and roller
+conditions on the momentum balance Eq. (4). Near the drained boundaries (x = 1), fluid drains early and
+the local effective stress increases, causing the region to carry a progressively larger share of the applied
+load. To maintain global force equilibrium, total stress is redistributed toward the interior of the domain
+(x = 0), where the material remains in a nearly undrained state. This transferred load is initially borne
+entirely by the pore fluid in the undrained interior, causing a temporary increase in pore pressure near
+
+8
+
+1.0
+
+Excess Pore Pressure (Pa)
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+t= 0.005 s
+t= 0.05 s
+t= 0.2 s
+t= 0.5 s
+
+0.0
+0.0
+
+0.2
+
+0.4
+0.6
+Distance (m)
+
+0.8
+
+1.0
+
+(a)
+×10−9
+t= 0.005 s
+t= 0.05 s
+t= 0.2 s
+t= 0.5 s
+
+7
+
+X deformation (m)
+
+6
+5
+4
+3
+2
+1
+0
+0.0
+
+0.2
+
+0.4
+0.6
+Distance (m)
+
+0.8
+
+1.0
+
+(b)
+
+Fig. 5: Pore-pressure and displacement profiles for Terzaghi’s problem in experiment 4.1. Symbols denote
+the PFLOTRAN solution and the solid line denotes the analytical solution.
+x = 0 that exceeds the initial undrained value. As the drainage front eventually reaches the center of the
+domain, the excess pore pressure dissipates and the system approaches its fully drained equilibrium.
+Fig. 8b shows the horizontal displacement (ux ) and vertical displacement (uz ) profiles along the
+domain at the same time instances. The horizontal displacement reflects the lateral expansion of the
+domain as pore pressure dissipates and effective stresses redistribute. The vertical displacement uz is
+negative, indicating compaction under the applied load, with its magnitude increasing over time as the
+excess pore pressure dissipates. The relative L2 -errors for pressure, horizontal displacement, and vertical
+displacement are less than 0.03, 0.1, and 0.1, respectively (Table A1).
+
+4.3 Thermo-poroelastic one-dimensional consolidation
+The thermo-poroelastic formulation is verified using the one-dimensional problem described by [35] and
+[44]. A homogeneous, fully saturated porous column is initialized with a uniform state (initial conditions
+for the mass balance Eq. (1) and the energy balance Eq. (3) are Pi = 101325 Pa and Ti = 0°C, respectively). On the top boundary, a compressive stress load of 1 Pa is suddenly applied and the temperature
+is raised to TBC,top = 50°C, which subsequently diffuses into the domain. All other boundaries are set
+impermeable (no-flux) and thermally insulating (zero heat flux) conditions such that no-flux conditions
+are prescribed to the mass balance Eq. (1) and the energy balance Eq. (3); the mechanical load is a traction boundary condition for the momentum balance Eq. (4). The loading produces an initial undrained
+
+9
+
+3.0
+
+Excess Pore Pressure (Pa)
+
+2.5
+
+2.0
+
+1.5
+
+1.0
+t= 0.001 s
+t= 0.002 s
+t= 0.003 s
+t= 0.05 s
+t= 0.2 s
+
+0.5
+
+0.0
+0.0
+
+0.2
+
+0.4
+0.6
+Distance (m)
+
+0.8
+
+1.0
+
+(a)
+×10−8
+0.0
+
+Strainxx
+
+−0.5
+−1.0
+−1.5
+−2.0
+
+t= 0.001 s
+t= 0.002 s
+t= 0.003 s
+t= 0.05 s
+t= 0.2 s
+
+−2.5
+0.0
+
+0.2
+
+0.4
+0.6
+Distance (m)
+
+0.8
+
+1.0
+
+(b)
+
+Fig. 6: Pore-pressure and strain profiles for Schiffman’s problem in experiment 4.1. Symbols denote the
+PFLOTRAN solution and the solid line denotes the analytical solution.
+pore-pressure increase, followed by pressure diffusion as the fluid drains from top boundary, while the
+temperature rises gradually due to thermal diffusion. A sketch of the conceptual model and the element
+mesh made up of hexahedrons are shown in Fig. 9a and 9b, respectively. Table 3 provides the parameters used in this verification. Fig. 10 shows the pore pressure, temperature, and displacement profiles at
+three depths with the analytical solution of [35].
+
+4.4 Pressurized-crack
+In the classical two-dimensional pressurized-crack problem [45, 46], we consider a planar crack in an
+infinite, homogeneous, linear-elastic medium subjected to a uniform internal pressure applied on the
+crack surface. Fig. 11a shows the sketch of the problem. The parameters that describe the problem are
+given in Table 4. The crack opening (displacement field) is commonly used as a benchmark for verifying
+numerical implementations for hydraulic fracturing and pressurized fracture mechanics in linear elastic
+models [46–48]. Here, we employ two approaches to verify the formulation for mechanical loading and
+hydraulic loading. In the purely mechanical setting, the displacement solution is recovered by applying a
+mechanical load where the solution is directly compared to the analytical displacement profile, Fig. 11b
+(the mechanical load is applied as a traction boundary condition in the momentum balance Eq. (4)). In
+the hydro-mechanical setting, the displacement solution is achieved by imposing an equivalent pressure
+gradient between the fracture region and the surrounding rock, so that the mechanical solver via Biot’s
+
+10
+
+2F
+
+𝑧
+𝑥
+
+2F
+(a)
+
+(b)
+
+Fig. 7: Setup of numerical experiment 4.2. (a) Conceptual sketch of Mandel’s problem: a saturated
+domain is confined between two impermeable plates which are loaded by a constant compressive stress
+(2F) applied along the z-direction. The lateral boundaries (x = ±Lx ) are traction-free and fully drained.
+By symmetry of the geometry and loading, only the blue-shaded quarter-domain is modeled. Symmetry
+conditions are imposed along the x = 0 and z = 0 planes by prescribing zero normal displacement
+and zero normal fluid flux (roller and no-flow conditions). (b) Corresponding element mesh (hexahedral
+elements).
+
+Table 2: Model parameters for Mandel’s problem 4.2.
+Parameter
+Domain length, width, height (Lx , Ly , Lz )
+Young’s modulus (E)
+Poisson’s ratio (ν)
+Biot’s coefficient (b)
+Fluid bulk modulus (Kf )
+Porosity (ϕ)
+Permeability (k)
+Fluid viscosity (µ)
+Applied compressive stress (2F)
+Number of elements
+Number of flow cells
+
+Value
+
+Unit
+
+1.0, 0.025, 1.0
+100
+0.25
+1
+∞
+0.375
+1 × 10−12
+0.001
+1 × 104
+13k
+6.4k
+
+m
+MPa
+–
+–
+Pa
+–
+m2
+Pa·s
+Pa
+–
+–
+
+coupling term reproduces the equivalent loading condition (pressure condition applied in the mass balance
+Eq. (1)).
+In the hydro-mechanical problem, we ensure that the pressure gradient is captured by employing two
+control volumes (flow mesh), which are mapped to one element of the fracture region in the mechanics
+domain, Fig. 11c. This approach ensures consistency is preserved across the coupled simulation and that
+the effective loading conditions in the hydro-mechanical model are applied properly (pressure conditions
+for the mass balance Eq. (1) mapped to the momentum balance Eq. (4)). Numerical results from both
+the purely mechanical and the hydro-mechanical setups closely follow the analytical Sneddon solution
+(Fig. 12), reproducing the symmetric opening profile with maximum displacement at the crack center and
+closure toward the tips. The relative L2 -norm errors for the mechanical and hydro-mechanical approaches
+are 0.041 and 0.026, respectively (Table A1).
+
+4.5 Circular borehole
+Stress concentrations around drilled boreholes are critical for understanding and evaluating subsurface
+formations in various field experiments. Here we verify the robustness of the numerical implementation of
+
+11
+
+Excess Pore Pressure (Pa)
+
+5000
+4000
+3000
+2000
+t= 0.01 s
+t= 0.1 s
+t= 0.5 s
+t= 5.0 s
+
+1000
+0
+0.0
+
+0.2
+
+0.4
+0.6
+Distance (m)
+
+0.8
+
+1.0
+
+0.8
+
+1.0
+
+(a)
+×10−5
+ux
+
+6
+
+t = 0.01 s
+t = 0.1 s
+t = 0.5 s
+t = 5.0 s
+
+Displacement (m)
+
+4
+2
+0
+−2
+−4
+
+uz
+t = 0.01 s
+t = 0.1 s
+t = 0.5 s
+t = 5.0 s
+
+−6
+−8
+0.0
+
+0.2
+
+0.4
+0.6
+Distance (m)
+
+(b)
+
+Fig. 8: Benchmark comparison for Mandel’s problem in experiment 4.2: (a) pore pressure profiles and
+(b) displacement profiles. Symbols denote the PFLOTRAN solution and the solid line denotes the semianalytical solution. Positive displacement corresponds to the lateral direction (drained boundary at
+x = 1 for the mass balance Eq. (1)), whereas negative displacement corresponds to the vertical direction
+(undrained boundary at z = 1 for the momentum balance Eq. (4)).
+the mechanics solver to capture stress distributions around a circular borehole for future work involving
+simulation of coupled subsurface processes.
+The numerical results are verified against Kirsch’s analytical solution [49–51] (Fig. 13a). The benchmark provides a solution for the stress distribution around a circular borehole subjected to biaxial far-field
+stresses, σH and σh , and internal borehole pressure (pw ). Both far-field stresses and internal pressure
+act as boundary conditions on the momentum balance Eq. (4). The three-dimensional domain is shown
+in Fig. 13b and the parameters employed in the experiment are described in Table 5. Fig. 14 shows the
+numerical results and Kirsch’s solution.
+The stress components are plotted as functions of radial distance from the borehole wall for three
+angles, θ = 0°, 45°, and 90°. The first angle aligns with the maximum far-field stress and yields the largest
+radial compressive stresses; the second exhibits nonzero shear stresses due to far-field stress anisotropy;
+and the last aligns with the minimum far-field stress. The relative L2 -norm errors for shear stress, hoop
+stress, and radial stress are below 0.03, 0.02, and 0.02, respectively (Table A1).
+
+5 Discussion
+This manuscript is intended primarily as a verification study for the PFLOTRAN THM implementation.
+The benchmark suite demonstrates that the sequential fixed-stress formulation reproduces analytical or
+semi-analytical responses for one-dimensional consolidation, two-dimensional poroelastic stress redistribution, thermo-poroelastic response, discontinuity loading, and borehole stress concentration. In that
+
+12
+
+F
+
+𝑧
+(a)
+
+(b)
+
+Fig. 9: Thermo-poroelasticity verification problem in experiment 4.3. (a) Schematic of the 1D saturated
+porous column subjected to a compressive stress load (F) applied on the top boundary. The bottom
+boundary is fixed (Dirichlet condition imposed on the momentum balance Eq. (4)), and zero normal displacement (roller conditions) is imposed on the lateral boundaries. (b) Corresponding three-dimensional
+domain discretized with hexahedral elements.
+
+Table 3: Setup and input parameters for thermo-poroelastic consolidation in experiment 4.3.
+Parameter
+
+Value
+
+Domain length, width, height (Lx , Ly , Lz )
+Porosity (ϕ)
+Young’s modulus (E)
+Poisson’s ratio (ν)
+Solid volumetric heat capacity (ρC)
+Thermal conductivity (kT )
+Thermal expansion coefficient (α)
+Permeability (k)
+Viscosity (µ)
+Biot’s coefficient (b)
+Initial temperature (Ti )
+Initial Pressure (Pi )
+Top surface temperature (Ttop,BC )
+Applied compressive stress load (F)
+Number of elements
+Number of Voronoi cells
+
+0.1, 0.1, 7
+0.2
+6000
+0.40
+1.672 × 105
+836
+1 × 10−7
+4.e-9
+0.001
+1
+0
+101325
+50
+1
+284
+70
+
+Unit
+m
+–
+Pa
+–
+J/(m3 °C)
+J/(m s °C)
+(1./°C)
+m2
+Pa s
+–
+°C
+Pa
+°C
+Pa
+–
+–
+
+sense, the results establish that the implemented capability recovers accepted reference behavior for the
+classes of problems tested here.
+The discontinuity and borehole examples play a complementary role in the verification suite. The
+pressurized-crack problem verifies that the mapping between flow and geomechanics degrees of freedom
+reproduces the expected Sneddon crack-opening response for the tested geometry and resolution. The
+Kirsch benchmark verifies the geomechanics stress response around a borehole for several angular directions. Together, these cases broaden the verification coverage beyond one-dimensional consolidation and
+show that the implementation behaves consistently for mechanically important stress and displacement
+observables.
+
+6 Conclusion
+The verification results presented here show that the PFLOTRAN THM capability reproduces analytical
+or semi-analytical benchmark responses for pressure diffusion, thermo-poroelastic evolution, deformation,
+discontinuity loading, and borehole stress redistribution within the scope of the problems considered.
+
+13
+
+Excess pore pressure (Pa)
+
+1.0
+
+z = 5.5m
+z = 4.15m
+z = 0.05m
+
+0.8
+0.6
+0.4
+0.2
+0.0
+10−1
+
+100
+
+101
+
+102
+Time (s)
+
+103
+
+104
+
+105
+
+103
+
+104
+
+105
+
+(a)
+
+Temperature change (deg C)
+
+50
+
+z = 5.5m
+z = 4.15m
+z = 0.05m
+
+40
+
+30
+
+20
+
+10
+
+0
+10−1
+
+100
+
+101
+
+102
+Time (s)
+
+(b)
+×10
+
+−4
+
+Z deformation (m)
+
+−5
+
+z = 1.35m
+z = 4.15m
+z = 7m
+
+−4
+−3
+−2
+−1
+0
+10−2
+
+10−1
+
+100
+
+101
+102
+Time (s)
+
+103
+
+104
+
+105
+
+(c)
+
+Fig. 10: Temporal evolution of (a) pore pressure, (b) temperature, and (c) vertical deformation at three
+locations in the one-dimensional thermo-poroelastic problem (4.3). Symbols denote the PFLOTRAN
+solution and the solid lines denote the semi-analytical solution of [35].
+The implementation leverages the well-established finite-volume framework within PFLOTRAN for mass
+and energy balance and extends it with a finite-element approach to solve the quasi-static momentum
+balance equation. The coupling is achieved by using a non-iterative fixed-stress split strategy. Furthermore, we demonstrate the proposed treatment for describing discontinuities (i.e. presence of fractures
+or cracks) based on mapping between mechanical and flow degrees of freedom suitable for PFLOTRAN
+implementation. The benchmark suite therefore provides a verification-oriented foundation for future
+THM studies in geologic porous media and engineered energy applications.
+
+Appendix A
+
+Tabulated relative L2 errors
+
+The relative L2 error is defined as
+
+εL2 =
+
+∥xh − x∥L2 (Ω)
+,
+∥x∥L2 (Ω)
+14
+
+(A1)
+
+Table 4: Setup and input parameters for pressurized-crack problem in experiment 4.4.
+Parameter
+Domain length, width, height (Lx , Ly , Lz )
+Crack length (Lf )
+Young’s modulus (E)
+Poisson’s ratio (ν)
+Applied load (pw , ∆p)
+Element edge length on crack interface (h)
+Fracture aperture (hydromechanics)
+Number of elements (mechanics, hydromechanics)
+Number of Voronoi cells (mechanics, hydromechanics)
+
+Value
+
+Unit
+
+20, 20, 0.06
+1
+10
+0
+1
+1
+1
+53k, 58k
+17k, 16k
+
+m
+m
+GPa
+–
+MPa
+cm
+cm
+–
+–
+
+Table 5: Setup and input parameters for circular borehole (Kirsch’s) problem in experiment 4.5.
+Parameter
+Domain length, width, height (Lx , Ly , Lz )
+Borehole radius (rw )
+Young’s modulus (E)
+Poisson’s ratio (ν)
+Far-field maximum stress (σH )
+Far-field minimum stress (σh )
+Internal applied pressure (pw )
+Measured angles from borehole axis (θ)
+Number of elements
+Number of Voronoi cells
+
+Value
+
+Unit
+
+10, 10, 2
+10
+1
+0.1
+-13
+-10
+1
+0, 45, 90
+287k
+56k
+
+m
+cm
+GPa
+–
+MPa
+MPa
+MPa
+degrees
+–
+–
+
+where xh and x denote the numerical solution and the corresponding analytical solution, respectively,
+for the variable of interest (e.g., pressure, temperature, displacement, strain, or stress).
+
+References
+[1] Heinemann, N., Alcalde, J., Miocic, J.M., Hangx, S.J.T., Kallmeyer, J., Ostertag-Henning, C.,
+Hassanpouryouzband, A., Thaysen, E.M., Strobel, G.J., Schmidt-Hattenberger, C., Edlmann, K.,
+Wilkinson, M., Bentham, M., Stuart Haszeldine, R., Carbonell, R., Rudloff, A.: Enabling largescale hydrogen storage in porous media – the scientific challenges. Energy Environ. Sci. 14, 853–864
+(2021) https://doi.org/10.1039/D0EE03536J
+[2] Rutqvist, J.: The geomechanics of co2 storage in deep sedimentary formations. Geotechnical and
+Geological Engineering 30, 525–551 (2012) https://doi.org/10.1007/s10706-011-9491-0
+[3] McClure, M.W., Horne, R.N.: An investigation of stimulation mechanisms in enhanced geothermal
+systems. International Journal of Rock Mechanics and Mining Sciences 72, 242–260 (2014) https:
+//doi.org/10.1016/j.ijrmms.2014.07.011
+[4] Biot, M.A.: General theory of three-dimensional consolidation. Journal of Applied Physics 12(2),
+155–164 (1941) https://doi.org/10.1063/1.1712886
+[5] Biot, M.A.: Theory of elasticity and consolidation for a porous anisotropic solid. Journal of Applied
+Physics 26(2), 182–185 (1955) https://doi.org/10.1063/1.1721956
+[6] Wang, H.F.: Theory of Linear Poroelasticity with Applications to Geomechanics and Hydrogeology.
+Princeton University Press, Princeton, NJ (2000). http://www.jstor.org/stable/j.ctt1jktrr4
+[7] Coussy,
+O.:
+Thermoporoelasticity,
+pp.
+71–112.
+John
+Wiley
+&
+Sons,
+Ltd,
+Chichester,
+UK
+(2003).
+Chap.
+4.
+https://doi.org/10.1002/0470092718.ch4
+.
+https://onlinelibrary.wiley.com/doi/abs/10.1002/0470092718.ch4
+[8] Lewis, R.W., Schrefler, B.A.: The Finite Element Method in the Static and Dynamic Deformation
+
+15
+
+Table A1: Relative L2 errors for the numerical experiments.
+Experiment
+Terzaghi’s problem (4.1)
+
+Schiffman’s problem (4.1)
+
+Mandel’s problem (4.2)
+
+Thermo-poroelastic bar (4.3)
+
+Pressurized crack (4.4)
+
+Circular borehole (4.5)
+
+Evaluation
+
+Rel. L2 error
+−3
+
+Variable
+
+t = 0.005 s
+t = 0.05 s
+t = 0.2 s
+t = 0.5 s
+t = 0.005 s
+t = 0.05 s
+t = 0.2 s
+t = 0.5 s
+
+1.2 × 10
+3.7 × 10−4
+4.7 × 10−4
+1.4 × 10−3
+9.0 × 10−3
+7.3 × 10−4
+5.8 × 10−4
+4.7 × 10−4
+
+pressure
+pressure
+pressure
+pressure
+displacement
+displacement
+displacement
+displacement
+
+t = 0.001 s
+t = 0.002 s
+t = 0.003 s
+t = 0.05 s
+t = 0.2 s
+t = 0.001 s
+t = 0.002 s
+t = 0.003 s
+t = 0.05 s
+t = 0.2 s
+
+3.4 × 10−2
+1.4 × 10−2
+9.4 × 10−3
+2.7 × 10−3
+1.6 × 10−3
+3.2 × 10−1
+1.7 × 10−1
+1.3 × 10−1
+2.3 × 10−2
+9.5 × 10−3
+
+pressure
+pressure
+pressure
+pressure
+pressure
+strain
+strain
+strain
+strain
+strain
+
+t = 0.01 s
+t = 0.1 s
+t = 0.5 s
+t = 5s
+t = 0.01 s
+t = 0.1 s
+t = 0.5 s
+t = 5s
+t = 0.01 s
+t = 0.1 s
+t = 0.5 s
+t = 5s
+
+1.0 × 10−2
+2.3 × 10−2
+2.3 × 10−2
+1.9 × 10−2
+2.5 × 10−2
+6.1 × 10−2
+9.5 × 10−2
+9.0 × 10−2
+1.9 × 10−2
+5.5 × 10−2
+9.5 × 10−2
+4.7 × 10−2
+
+pressure
+pressure
+pressure
+pressure
+horizontal displacement
+horizontal displacement
+horizontal displacement
+horizontal displacement
+vertical displacement
+vertical displacement
+vertical displacement
+vertical displacement
+
+z = 5.5 m
+z = 4.15 m
+z = 0.05 m
+z = 5.5 m
+z = 4.15 m
+z = 0.05 m
+z = 1.35 m
+z = 4.15 m
+z = 7m
+
+2.7 × 10−1
+2.4 × 10−1
+2.1 × 10−1
+4.1 × 10−3
+8.3 × 10−4
+1.0 × 10−3
+3.6 × 10−2
+3.6 × 10−2
+3.6 × 10−2
+
+pressure
+pressure
+pressure
+temperature
+temperature
+temperature
+displacement
+displacement
+displacement
+
+mechanical
+hydro-mechanical
+
+4.1 × 10−2
+2.6 × 10−2
+
+displacement
+displacement
+
+θ = 0◦
+θ = 45◦
+θ = 90◦
+θ = 0◦
+θ = 45◦
+θ = 90◦
+θ = 0◦
+θ = 45◦
+θ = 90◦
+
+4.6 × 10−3
+8.3 × 10−3
+1.3 × 10−2
+3.8 × 10−3
+6.3 × 10−3
+1.5 × 10−2
+-†
+2.6 × 10−2
+-†
+
+hoop stress
+hoop stress
+hoop stress
+radial stress
+radial stress
+radial stress
+shear stress
+shear stress
+shear stress
+
+†
+
+The analytical shear stress is identically zero at θ = 0◦ and θ = 90◦ by symmetry; a relative error is therefore
+not reported.
+Note: For experiment 4.3, the reported errors are time-history metrics evaluated at the stated sensor locations;
+this table therefore combines profile-based and time-history-based verification quantities in order to keep the
+benchmark evidence self-contained in the manuscript.
+
+16
+
+crack
+
+𝑦
+𝑥
+(a)
+
+(b)
+
+(c)
+
+Fig. 11: Pressurized-crack verification problem (Experiment 4.4). (a) 2D schematic of the problem setup,
+showing a central crack embedded in the domain with zero normal displacement prescribed to the outer
+boundaries (Dirichlet condition imposed on the momentum balance Eq. (4)); plane-strain conditions
+are assumed in the out-of-plane (z) direction. (b) Purely mechanical model, which exploits symmetry
+to represent only half of the domain. The close-up view shows the 3D mesh near the crack interface
+(red outline), where the mechanical boundary conditions are applied. (c) Hydro-mechanical model, in
+which the fracture is explicitly assigned as a region (yellow) embedded within the surrounding matrix
+(green). The close-up top view shows the element mesh near the fracture, with fracture nodes highlighted
+(yellow circles). To preserve the pressure gradient with flow–mechanics node mapping in PFLOTRAN, the
+fracture must be at least one element wide to ensure accurate nodal displacements (the fracture pressure
+is imposed on the mass balance Eq. (1)). Arrows indicate the direction of displacement experienced by
+each fracture node.
+and Consolidation of Porous Media, 2nd edn. John Wiley & Sons, Chichester, UK (1998)
+[9] Steefel, C.I., DePaolo, D.J., Lichtner, P.C.: Reactive transport modeling: An essential tool and a
+new research approach for the earth sciences. Earth and Planetary Science Letters 240(3), 539–558
+(2005) https://doi.org/10.1016/j.epsl.2005.09.017
+[10] Rutqvist, J., Stephansson, O.: The role of hydromechanical coupling in fractured rock engineering.
+Hydrogeology Journal 11(1), 7–40 (2003)
+[11] Kim, J., Tchelepi, H.A., Juanes, R.: Stability and convergence of sequential methods for coupled flow
+and geomechanics: Fixed-stress and fixed-strain splits. Computer Methods in Applied Mechanics
+and Engineering 200(13), 1591–1606 (2011) https://doi.org/10.1016/j.cma.2010.12.022
+
+17
+
+1.0
+
+×10−4
+
+X deformation [m]
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+Mechanical
+Hydromechanical
+
+0.0
+−0.50
+
+−0.25
+
+0.00
+Distance [m]
+
+0.25
+
+0.50
+
+Fig. 12: Crack-opening displacement profile along the crack interface for the pressurized-crack problem
+in experiment 4.4. The solid line denotes the analytical Sneddon solution, and the symbols denote the
+PFLOTRAN results for the purely mechanical and hydro-mechanical setups.
+
+𝜎ℎ
+
+𝑝𝑤
+
+𝜎𝐻
+
+𝜎𝐻
+
+𝑦
+𝑥
+
+𝜎ℎ
+(a)
+
+(b)
+
+Fig. 13: (a) Sketch of Kirsch’s setup in experiment 4.5 for the circular borehole domain subjected
+to biaxial far-field stresses (σH and σh ) and applied internal cavity pressure (pw ), applied as traction
+boundary in the momentum balance Eq. (4)). (b) Corresponding three-dimensional element mesh used
+for the plane-strain model. Roller boundary conditions are applied on the top and bottom (z-normal)
+faces (zero normal displacement in Eq. (4)). The mesh is locally refined near the borehole to capture the
+stress concentration.
+[12] Settari, A., Mourits, F.M.: A coupled reservoir and geomechanical simulation system. SPE Journal
+3(3), 219–226 (1998) https://doi.org/10.2118/50939-PA
+[13] Mikelić, A., Wheeler, M.F.: Convergence of iterative coupling for coupled flow and geomechanics.
+Computational Geosciences 17(3), 479–496 (2013) https://doi.org/10.1007/s10596-012-9318-y
+[14] Settgast, R.R., Aronson, R.M., Besset, J.R., Borio, A., Bui, Q.M., Byer, T.J., Castelletto, N., Citrain, A., Corbett, B.C., Corbett, J., Cordier, P., Cremon, M.A., Crook, C.M., Cusini, M., Fei, F.,
+Frambati, S., Franc, J., Franceschini, A., Frigo, M., Fu, P., Gazzola, T., Gross, H., Hamon, F., Han,
+B.M., Hao, Y., Hasanzade, R., Homel, M., Huang, J., Jin, T., Ju, I., Kachuma, D., Karimi-Fard,
+M., Kim, T., Klevtsov, S., Lapene, A., Magri, V.A.p., Mazuyer, A., N’diaye, M., Osei-Kuffuor, D.,
+Povolny, S., Ren, G., Semnani, S.J., Sherman, C.S., Rey, M., Tchelepi, H.A., Tobin, W.R., Tomin, P.,
+Untereiner, L., Vargas, A., Waziri, S., Wen, X., White, J.A., Wu, H.: Geos: A performance portable
+multi-physics simulation framework for subsurface applications. Journal of Open Source Software
+9(102), 6973 (2024) https://doi.org/10.21105/joss.06973
+[15] Bilke, L., Naumov, D., Fischer, T., Wang, W., Mollaali, M., Buchwald, J., Max, J., Lehmann, C.,
+18
+
+0.0
+
+×107
+
+−0.2
+
+Hoop stress
+Radial stress
+Shear stress
+
+Stress (Pa)
+
+−0.4
+−0.6
+−0.8
+−1.0
+−1.2
+−1.4
+−1.6
+
+10−1
+
+100
+Radius (m)
+
+101
+
+(a)
+×10
+
+7
+
+Stress (Pa)
+
+0.0
+Hoop stress
+Radial stress
+Shear stress
+
+−0.5
+−1.0
+−1.5
+−2.0
+10−1
+
+100
+Radius (m)
+
+101
+
+(b)
+0.0
+
+×10
+
+7
+
+Stress (Pa)
+
+−0.5
+−1.0
+−1.5
+−2.0
+
+Hoop stress
+Radial stress
+Shear stress
+
+−2.5
+10−1
+
+100
+Radius (m)
+
+101
+
+(c)
+
+Fig. 14: Kirsch benchmark results for experiment 4.5. Symbols denote the PFLOTRAN solution and
+the solid lines denote the analytical solution. The radial, hoop, and shear stress components are plotted
+as functions of radial distance from the cavity wall for (a) θ = 0◦ , (b) θ = 45◦ , and (c) θ = 90◦ .
+Berger, F., Grunwald, N., Meisel, T., Zill, F., Stehling, T., Vehling, F., Nagel, T., Silbermann, C.,
+Shukla, D., Kiszkurno, F.K., Tecklenburg, J.: OpenGeoSys. Zenodo (2025). https://doi.org/10.5281/
+zenodo.17162299
+[16] Harbour, L., Giudicelli, G., Lindsay, A.D., Hansel, P.G., Icenhour, C., Li, M., Miller, J.M., Stogner,
+R.H., Behne, P., Yankura, D., Prince, Z.M., DeChant, C., Schwen, D., Spencer, B.W., Tano, M.,
+Choi, N., Wang, Y., Nezdyur, M., Miao, Y., Hu, T., Kumar, S., Matthews, C., Langley, B., Nobre,
+N., Blair, A., MacMackin, C., Rocha, H.B., Palmer, E., Carter, J., Meier, J., Slaughter, A.E., Andrš,
+D., Carlsen, R.W., Kong, F., Gaston, D.R., Permann, C.J.: 4.0 MOOSE: Enabling massively parallel
+multiphysics simulation. SoftwareX 31, 102264 (2025) https://doi.org/10.1016/j.softx.2025.102264
+[17] Hammond, G.E., Lichtner, P.C., Mills, R.T.: Evaluating the performance of
+parallel
+subsurface
+simulators:
+An
+illustrative
+example
+with
+pflotran.
+Water
+Resources
+Research
+50(1),
+208–228
+(2014)
+https://doi.org/10.1002/2012WR013483
+https://agupubs.onlinelibrary.wiley.com/doi/pdf/10.1002/2012WR013483
+
+19
+
+[18] Lichtner, P.C., Hammond, G.E., Lu, C., Karra, S., Bisht, G., Andre, B., Mills, R., Kumar, J.:
+Pflotran user manual: A massively parallel reactive flow and transport model for describing surface
+and subsurface processes. Technical report, Los Alamos National Lab. (LANL), Los Alamos, NM
+(United States); Sandia National Lab. (SNL-NM), Albuquerque, NM (United States); Lawrence
+Berkeley National Lab. (LBNL), Berkeley, CA (United States); Oak Ridge National Lab. (ORNL),
+Oak Ridge, TN (United States); OFM Research, Redmond, WA (United States) (January 2015).
+https://doi.org/10.2172/1168703 . https://www.osti.gov/biblio/1168703
+[19] Lichtner, P.C., Hammond, G., Lu, C., Karra, S., Bisht, G., Andre, B., Mills, R., Kumar, J., Frederick,
+J.: Pflotran user manual. Los Alamos, NM, Los Alamos National Laboratory (2001)
+[20] Okabe, A., Boots, B., Sugihara, K., Chiu, S.N.: Spatial Tessellations: Concepts and Applications
+of Voronoi Diagrams, 2nd edn. John Wiley & Sons, Chichester (2000). https://doi.org/10.1002/
+9780470317013
+[21] Voronoi, G.: Nouvelles applications des paramètres continus à la théorie des formes quadratiques.
+deuxième mémoire: Recherches sur les paralléloèdres primitifs. Journal für die reine und angewandte
+Mathematik 134, 198–287 (1908)
+[22] Delaunay, B.: Sur la sphère vide. Bulletin de l’Académie des Sciences de l’URSS, Classe des sciences
+mathématiques et naturelles (6), 793–800 (1934)
+[23] Lie, K.-A.: An Introduction to Reservoir Simulation Using MATLAB/GNU Octave: User Guide for
+the MATLAB Reservoir Simulation Toolbox (MRST). Cambridge University Press, ??? (2019)
+[24] Aavatsmark, I.: An introduction to multipoint flux approximations for quadrilateral grids. Computational Geosciences 6(3-4), 405–432 (2002) https://doi.org/10.1023/A:1021291114475
+[25] Palagi, C.L., Aziz, K.: Use of voronoi grid in reservoir simulation. SPE Advanced Technology
+Series 2(02), 69–77 (1994) https://doi.org/10.2118/22889-PA https://onepetro.org/ATS/articlepdf/2/02/69/2606005/spe-22889-pa.pdf
+[26] Edwards, M.G., Rogers, C.F.: Finite volume discretization with imposed flux continuity for the
+general tensor pressure equation. Computational Geosciences 2(4), 259–290 (1998) https://doi.org/
+10.1023/A:1011549407709
+[27] Eymard, R., Gallouët, T., Herbin, R.: Finite volume methods. In: Ciarlet, P.G., Lions, J.-L. (eds.)
+Handbook of Numerical Analysis vol. 7, pp. 713–1020. Elsevier, Amsterdam (2000)
+[28] Kim, J., Tchelepi, H.A., Juanes, R.: Stability and convergence of sequential methods for coupled flow
+and geomechanics: Fixed-stress and fixed-strain splits. Computer Methods in Applied Mechanics
+and Engineering 200(13-16), 1591–1606 (2011) https://doi.org/10.1016/j.cma.2010.12.022
+[29] Balay, S., Abhyankar, S., Adams, M.F., Brown, J., Brune, P., Buschelman, K., Dalcin, L., Eijkhout,
+V., Gropp, W.D., Kaushik, D., Knepley, M.G., McInnes, L.C., Rupp, K., Smith, B.F., Zampini,
+S., Zhang, H.: PETSc Web page. http://www.mcs.anl.gov/petsc (2015). http://www.mcs.anl.gov/
+petsc
+[30] Balay, S., Abhyankar, S., Adams, M.F., Brown, J., Brune, P., Buschelman, K., Dalcin, L., Eijkhout,
+V., Gropp, W.D., Kaushik, D., Knepley, M.G., McInnes, L.C., Rupp, K., Smith, B.F., Zampini, S.,
+Zhang, H.: PETSc users manual. Technical Report ANL-95/11 - Revision 3.6, Argonne National
+Laboratory (2015). http://www.mcs.anl.gov/petsc
+[31] Balay, S., Gropp, W.D., McInnes, L.C., Smith, B.F.: In: Arge, E., Bruaset, A.M., Langtangen, H.P.
+(eds.) Efficient Management of Parallelism in Object-Oriented Numerical Software Libraries, pp.
+163–202. Birkhäuser Boston, Boston, MA (1997). https://doi.org/10.1007/978-1-4612-1986-6 8
+[32] Terzaghi, K.: Theoretical Soil Mechanics. John Wiley & Sons, New York (1943)
+[33] Schiffman, R.L.: Consolidation of soil under time-dependent loading and varying permeability.
+
+20
+
+Highway Research Board Proceedings 37, 584–617 (1958)
+[34] Mandel, J.: Consolidation des sols (étude mathématique). Géotechnique 3(7), 287–299 (1953)
+[35] Bai, B.: One-dimensional thermal consolidation characteristics of geotechnical media under nonisothermal condition. Gongcheng Lixue/Engineering Mechanics 22, 186–191 (2005)
+[36] Sandia National Laboratories: Cubit mesh generation toolkit user documentation. Technical Report
+SAND2025-13033, Sandia National Laboratories (2025). https://cubit.sandia.gov
+[37] Stimpson, C., Sjaardema, G., Dudley, C., Yorgason, R., Hanks, B., White, D., Kerr, R., Mitchell,
+S., Shepherd, J., Tautges, T., et al.: Cubit v.16.X (2022). https://doi.org/10.11578/dc.20221017.1 .
+https://www.osti.gov/biblio/code-95109
+[38] Los Alamos National Laboratory: LaGriT: Los Alamos Grid Toolbox. https://lagrit.lanl.gov. Mesh
+generation and optimization software (2024)
+[39] Karra, S.: satkarra/voronoi. GitHub. [Online; accessed 23-3-2026] (2024). https://github.com/
+satkarra/voronoi
+[40] Schlömer, N.: meshio: Python tools for I/O of mesh files. https://github.com/nschloe/meshio.
+Accessed: 2026-03-23 (2023)
+[41] Huang, Y., Huang, X., Hyman, J.D., et al.: Analytic solutions and field-scale application for verification of coupled thermo-hydro-mechanical processes in subsurface fractured media. Computational
+Geosciences 29, 25 (2025) https://doi.org/10.1007/s10596-025-10364-8
+[42] Castelletto, N., White, J.A., Tchelepi, H.A.: Accuracy and convergence properties of the fixedstress iterative solution of two-way coupled poromechanics. International Journal for Numerical and
+Analytical Methods in Geomechanics 39(14), 1593–1618 (2015) https://doi.org/10.1002/nag.2400
+https://onlinelibrary.wiley.com/doi/pdf/10.1002/nag.2400
+[43] Abousleiman, Y., Cheng, A.H.-D., Cui, L., Detournay, E., Roegiers, J.-C.: Mandel’s problem
+revisited. Géotechnique 46(2), 187–195 (1996) https://doi.org/10.1680/geot.1996.46.2.187
+[44] Gao, Q., Ghassemi, A.: Three-dimensional thermo-poroelastic modeling and analysis of flow, heat
+transport and deformation in fractured rock with applications to a lab-scale geothermal system.
+Rock Mechanics and Rock Engineering 53(4) (2019) https://doi.org/10.1007/s00603-019-01989-0
+[45] Sneddon, I.N.: The distribution of stress in the neighbourhood of a crack in an elastic solid. Proceedings of the Royal Society of London. Series A, Mathematical and Physical Sciences 187(1009),
+229–260 (1946) https://doi.org/10.1098/rspa.1946.0077
+[46] Sneddon, I.N., Elliot, H.A.: The opening of a griffith crack under internal pressure. Quarterly of
+Applied Mathematics 4, 262–267 (1946)
+[47] Adachi, J., Siebrits, E., Peirce, A., Desroches, J.: Computer simulation of hydraulic fractures. International Journal of Rock Mechanics and Mining Sciences 44(5), 739–757 (2007) https://doi.org/10.
+1016/j.ijrmms.2006.11.006
+[48] Anderson, T.L.: Fracture Mechanics: Fundamentals and Applications, 4th edn. CRC Press, Boca
+Raton, FL (2017). https://doi.org/10.1201/9781315370293
+[49] Kirsch, E.G.: Die theorie der elastizität und die bedürfnisse der festigkeitslehre. Zeitshrift des
+Vereines deutscher Ingenieure 42, 797–807 (1898)
+[50] Jaeger, J.C., Cook, N.G.W., Zimmerman, R.: Fundamentals of Rock Mechanics, 4th edn. WileyBlackwell, Maden, MA (2007). https://doi.org/10.1017/CBO9780511735349
+[51] Zoback, M.D.: Reservoir Geomechanics. Cambridge University Press, Cambridge (2007). https://
+doi.org/10.1017/CBO9780511586477 . Publication date: 10 December 2009
+21
+
+

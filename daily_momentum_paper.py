@@ -21,6 +21,7 @@ import sys
 import time
 import urllib.request
 import urllib.parse
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 # ============================================================
@@ -160,19 +161,103 @@ def save_state(state):
         json.dump(state, f, indent=2, ensure_ascii=False)
 
 
-def search_arxiv_via_api():
-    """尝试通过 arXiv API 搜索"""
-    # 改用 HTML 搜索，跳过有问题的 API
-    return None
+def search_arxiv_via_api(query, max_results=15):
+    """通过 arXiv 官方 API (export.arxiv.org) 搜索论文
+
+    遵守 API 使用条款: https://info.arxiv.org/help/api/tou.html
+    限速: 最多 1 请求/3 秒，单连接
+    """
+    # arXiv API 要求去掉引号，直接传搜索词
+    search_query = re.sub(r'["\']', '', query).strip()
+    url = (f"{ARXIV_API_URL}?"
+           f"search_query=all:{urllib.parse.quote(search_query)}"
+           f"&start=0&max_results={max_results}"
+           f"&sortBy=submittedDate&sortOrder=descending")
+
+    print(f"[API 搜索] {query[:60]}...")
+    req = urllib.request.Request(url, headers={
+        'User-Agent': 'MomentumPaperBot/1.0 (mailto:research@example.com)'
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            xml_data = resp.read().decode('utf-8')
+    except Exception as e:
+        print(f"[API 错误] 搜索失败: {e}")
+        return []
+
+    # 解析 Atom XML
+    ns = {
+        'atom': 'http://www.w3.org/2005/Atom',
+        'arxiv': 'http://arxiv.org/schemas/atom',
+    }
+    root = ET.fromstring(xml_data)
+    papers = []
+    for entry in root.findall('atom:entry', ns):
+        # arXiv ID
+        id_full = entry.find('atom:id', ns).text
+        id_match = re.search(r'(\d+\.\d+)', id_full)
+        if not id_match:
+            continue
+        arxiv_id = id_match.group(1)
+
+        # 标题
+        title_el = entry.find('atom:title', ns)
+        title = title_el.text.strip() if title_el is not None else "Unknown"
+        title = re.sub(r'\s+', ' ', title).strip()
+
+        # 摘要
+        summary_el = entry.find('atom:summary', ns)
+        summary = summary_el.text.strip() if summary_el is not None else ""
+        summary = re.sub(r'\s+', ' ', summary).strip()[:500]
+
+        # 作者
+        authors = []
+        for author in entry.findall('atom:author', ns):
+            name_el = author.find('atom:name', ns)
+            if name_el is not None and name_el.text:
+                authors.append(name_el.text.strip())
+
+        # 发布日期
+        pub_el = entry.find('atom:published', ns)
+        published = pub_el.text[:10] if pub_el is not None else ""
+
+        # 分类
+        categories = []
+        for cat in entry.findall('atom:category', ns):
+            term = cat.get('term', '')
+            if term:
+                categories.append(term)
+
+        papers.append({
+            'arxiv_id': arxiv_id,
+            'title': title,
+            'summary': summary,
+            'published': published,
+            'updated': published,
+            'authors': authors[:10],
+            'categories': categories[:10],
+            'pdf_url': f"https://arxiv.org/pdf/{arxiv_id}.pdf",
+            'abs_url': f"https://arxiv.org/abs/{arxiv_id}",
+        })
+
+    print(f"  >> API 返回 {len(papers)} 篇论文")
+    return papers
 
 
 def search_arxiv(query, max_results=15):
-    """通过 arXiv HTML 搜索页面获取论文列表（API 经常限流，改用网页搜索）"""
+    """搜索论文：优先使用 arXiv 官方 API，失败时回退到 HTML 搜索页面"""
+    # ── 优先：官方 API ──
+    papers = search_arxiv_via_api(query, max_results)
+    if papers:
+        return papers
+
+    # ── 回退：HTML 搜索页面 ──
+    print("[回退] API 搜索失败，尝试 HTML 搜索页面...")
     search_query = query.replace("all:", "").replace('"', "")
     url = ("https://arxiv.org/search/?searchtype=all"
            f"&query={urllib.parse.quote(query)}"
            "&order=-announced_date_first")
-    print(f"[搜索] 动量论文: {query[:60]}...")
+    print(f"[HTML 搜索] {query[:60]}...")
     req = urllib.request.Request(url, headers={
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
                        'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -337,7 +422,7 @@ def main():
     seen_ids = set()
     for idx, query in enumerate(SEARCH_QUERIES):
         if idx > 0:
-            time.sleep(5)  # 避免触发 arXiv 限流
+            time.sleep(3)  # 遵守 API 限速: 1 请求/3 秒
         for p in search_arxiv(query):
             if p['arxiv_id'] not in seen_ids:
                 seen_ids.add(p['arxiv_id'])
