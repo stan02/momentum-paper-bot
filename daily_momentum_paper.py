@@ -356,6 +356,36 @@ def is_relevant_paper(paper):
     title_lower = paper['title'].lower()
     summary_lower = paper['summary'].lower()
     combined = title_lower + ' ' + summary_lower
+
+    # ── 排除物理/工程语境下的假阳性 ──
+    # 如果 "momentum" 出现在力学/流体/地球物理等语境中
+    # 且没有金融语境关键词，直接排除
+    physics_exclusion = [
+        'momentum balance', 'balance of momentum', 'linear momentum',
+        'quasi-static momentum', 'fluid momentum', 'angular momentum',
+        'momentum equation', 'momentum conservation', 'momentum source',
+        'momentum exchange', 'momentum transfer', 'momentum flux',
+        'thermo-poroelasticity', 'poroelasticity', 'poroelastic',
+        'navier-stokes', 'reynolds-averaged', 'rans', 'les',
+        'computational fluid dynamics', 'cfd simulation',
+        'finite element momentum', 'particle momentum',
+        'momentum thickness', 'momentum integral',
+        'electromagnetic momentum', 'photon momentum',
+        'momentum space', 'momentum distribution function',
+        'momentum operator', 'wave momentum',
+    ]
+    financial_context = [
+        'stock', 'equity', 'portfolio', 'trading strategy',
+        'asset pricing', 'investor', 'sharpe', 'volatility',
+        'risk premium', 'factor model', 'market anomaly',
+        'momentum return', 'momentum profit', 'momentum portfolio',
+        'return predictability', 'abnormal return',
+    ]
+    has_physics = any(kw in combined for kw in physics_exclusion)
+    has_finance = any(kw in combined for kw in financial_context)
+    if has_physics and not has_finance:
+        return False, 0
+
     strong_keywords = ['momentum', 'time-series momentum', 'cross-sectional momentum']
     aux_keywords = [
         'daily', 'short-term', 'trading strategy', 'factor', 'anomaly',
